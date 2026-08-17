@@ -86,6 +86,24 @@ class DataSource(ABC):
         """
         return False
 
+    def get_dataframe(self, pushdowns: Pushdowns) -> DataFrame | None:
+        """If not None, the optimizer replaces this source with this DataFrame's plan.
+
+        Called once per ``optimize()`` after filter/projection/limit pushdowns have
+        been attached to the source, and before scan tasks are materialized.
+        Returning ``None`` (the default) keeps the ``get_tasks`` path.
+
+        Use ``pushdowns.filters`` / ``partition_filters`` only to choose files.
+        Do not ``.where()`` the residual filter — the optimizer re-applies it.
+        Do not call ``self.read()`` (that builds a new placeholder leaf).
+        Do not ``collect`` / ``optimize`` / ``explain(show_all=True)`` in here
+        (that re-enters the optimizer).
+
+        Warning:
+            This API is early in its development and is subject to change.
+        """
+        return None
+
     @abstractmethod
     async def get_tasks(self, pushdowns: Pushdowns) -> AsyncIterator[DataSourceTask]:
         """Yields tasks as they are discovered. Called during execution, not planning."""

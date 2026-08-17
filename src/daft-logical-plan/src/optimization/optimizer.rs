@@ -8,16 +8,16 @@ use super::{
     logical_plan_tracker::LogicalPlanTracker,
     rules::{
         DetectMonotonicId, DropIntoBatches, DropRepartition, EliminateCrossJoin, EliminateOffsets,
-        EliminateSubqueryAliasRule, EnrichWithStats, ExtractWindowFunction, FilterNullJoinKey,
-        LiftProjectFromAgg, MaterializeScans, OptimizerRule, PushDownAggregation,
-        PushDownAntiSemiJoin, PushDownFilter, PushDownJoinPredicate, PushDownLimit,
-        PushDownProjection, PushDownShard, ReorderJoins, RewriteCheckpointSource,
+        EliminateSubqueryAliasRule, EnrichWithStats, ExpandDataFrameSources, ExtractWindowFunction,
+        FilterNullJoinKey, LiftProjectFromAgg, MaterializeScans, OptimizerRule,
+        PushDownAggregation, PushDownAntiSemiJoin, PushDownFilter, PushDownJoinPredicate,
+        PushDownLimit, PushDownProjection, PushDownShard, ReorderJoins, RewriteCheckpointSource,
         RewriteCountDistinct, RewriteOffset, ShardScans, SimplifyExpressionsRule,
         SimplifyNullFilteredJoin, SplitExplodeFromProject, SplitGranularProjection, SplitUDFs,
         SplitUDFsFromFilters, UnnestPredicateSubquery, UnnestScalarSubquery,
     },
 };
-use crate::{LogicalPlan, optimization::rules::SplitVLLM};
+use crate::{optimization::rules::SplitVLLM, LogicalPlan};
 
 /// Config for optimizer.
 #[derive(Debug)]
@@ -225,6 +225,21 @@ impl OptimizerBuilder {
                 vec![Box::new(SimplifyExpressionsRule::new())],
                 RuleExecutionStrategy::FixedPoint(None),
             ),
+            // --- Unfold DataFrame-template DataSources before materializing scans ---
+            RuleBatch::new(
+                vec![Box::new(ExpandDataFrameSources::new())],
+                RuleExecutionStrategy::Once,
+            ),
+            // Inner parquet scans from unfold need a second pushdown pass.
+            // FixedPoint: PushDownProjection can emit a Filter that needs another pass.
+            RuleBatch::new(
+                vec![
+                    Box::new(PushDownFilter::new(self.config.strict_pushdown)),
+                    Box::new(PushDownProjection::new()),
+                    Box::new(PushDownLimit::new()),
+                ],
+                RuleExecutionStrategy::FixedPoint(None),
+            ),
             // --- Materialize scan nodes ---
             RuleBatch::new(
                 vec![Box::new(MaterializeScans::new())],
@@ -294,7 +309,11 @@ impl OptimizerBuilder {
     }
 
     pub fn when(self, condition: bool, f: impl FnOnce(Self) -> Self) -> Self {
-        if condition { f(self) } else { self }
+        if condition {
+            f(self)
+        } else {
+            self
+        }
     }
 }
 
@@ -406,21 +425,20 @@ mod tests {
     use common_treenode::{Transformed, TreeNode};
     use daft_core::prelude::*;
     use daft_dsl::{
-        AggExpr, Expr,
-        functions::{FunctionExpr, python::LegacyPythonUDF},
-        lit, resolved_col, unresolved_col,
+        functions::{python::LegacyPythonUDF, FunctionExpr},
+        lit, resolved_col, unresolved_col, AggExpr, Expr,
     };
     use daft_scan::Pushdowns;
 
     use super::{Optimizer, OptimizerBuilder, OptimizerConfig, RuleBatch, RuleExecutionStrategy};
     use crate::{
-        LogicalPlan,
         ops::{Filter, Project, UDFProject},
         optimization::rules::{EnrichWithStats, MaterializeScans, OptimizerRule},
         test::{
             dummy_scan_node, dummy_scan_node_with_pushdowns, dummy_scan_operator,
             dummy_scan_operator_for_aggregation,
         },
+        LogicalPlan,
     };
 
     /// Test that the optimizer terminates early when the plan is not transformed

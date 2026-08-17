@@ -2,8 +2,10 @@
   "rust-analyzer.check.extraEnv": {
     "CARGO_TARGET_DIR": "target/analyzer"
   },
-  "rust-analyzer.check.features": "all",
-  "rust-analyzer.cargo.features": "all",
+  // `hdfs` pulls hdfs-sys, which compiles libhdfs and needs a JDK (jni.h).
+  // Enable it locally if JAVA_HOME points at a real JDK: ["python", "hdfs"]
+  "rust-analyzer.check.features": ["python"],
+  "rust-analyzer.cargo.features": ["python"],
   "python.testing.pytestArgs": [
     "tests"
   ],
