@@ -26,3 +26,13 @@
 
 - Titles: Conventional Commits format; enforced by `.github/workflows/pr-labeller.yml`.
 - Descriptions: follow `.github/pull_request_template.md`.
+
+## Cursor Cloud specific instructions
+
+Daft is a single product: a Python library (`daft`) backed by a Rust workspace (compiled into `daft/daft.abi3.so`). There is no server/frontend to run — "running the app" means importing `daft` and executing dataframe/SQL operations.
+
+- The startup update script installs `uv` and runs `make .venv` (deps only). The compiled Rust extension is carried in the VM snapshot, so a booted agent can normally `import daft` immediately without rebuilding.
+- After changing Rust code under `src/`, you must run `make build` to recompile (first clean build is ~6 min; incremental is seconds). Python-only changes need no rebuild since `daft` is installed editable.
+- `make .venv` is a Make *file target*: it is a no-op whenever the `.venv/` directory already exists. To pick up dependency changes from `uv.lock`, run `rm -rf .venv && make .venv` (or `uv sync --no-install-project --all-extras --all-groups`). Note that a bare `uv sync` uninstalls the maturin editable `daft` dist-info; re-run `make build` afterward to restore a robust (cwd-independent) editable install.
+- Always set `DAFT_RUNNER` when running code/tests: use `DAFT_RUNNER=native` by default; `DAFT_RUNNER=ray` for distributed paths.
+- Lint uses pinned pre-commit hook versions, not the `ruff` in `.venv` (which is newer and stricter). Run lint via `make lint` / `pre-commit run ruff-check --all-files`; do not judge lint by calling `.venv/bin/ruff` directly.
